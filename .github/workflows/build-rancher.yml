@@ -1,0 +1,98 @@
+name: Build Rancher
+
+on:
+  repository_dispatch:
+  workflow_dispatch:
+
+env:
+  REPO_OWN: futuretea
+  REPO_NAME: rancher
+  REPO_BRANCH: futuretea
+  TZ: Asia/Shanghai
+
+jobs:
+  build:
+    runs-on: ubuntu-18.04
+
+    steps:
+    - name: Checkout
+      uses: actions/checkout@main
+
+    - name: Initialization environment
+      env:
+        DEBIAN_FRONTEND: noninteractive
+      run: |
+        echo "Prune system, please wait ..."
+        sudo -E apt-get -y purge \
+          azure-cli \
+          ghc* \
+          zulu* \
+          hhvm \
+          llvm* \
+          firefox \
+          google* \
+          dotnet* \
+          powershell \
+          openjdk* \
+          mysql* \
+          php* >/dev/null 2>&1
+        sudo rm -rf \
+          /usr/share/dotnet \
+          /etc/mysql \
+          /etc/php >/dev/null 2>&1
+        sudo -E apt-get -y autoremove --purge >/dev/null 2>&1
+        sudo -E apt-get clean >/dev/null 2>&1
+        sudo timedatectl set-timezone "$TZ"
+
+    - name: Get code info
+      id: info
+      run: |
+        df -hT $PWD
+        git clone https://github.com/${REPO_OWN}/${REPO_NAME} -b $REPO_BRANCH ${REPO_NAME}
+        pushd $GITHUB_WORKSPACE/${REPO_NAME}
+        source scripts/version
+        popd
+        echo "::set-output name=artifacts_dir::${REPO_NAME}/dist/artifacts"
+        echo "::set-output name=artifacts_dir_abs::${GITHUB_WORKSPACE}/${REPO_NAME}/dist/artifacts"
+        echo "::set-output name=tag_name::$(date +"%Y.%m.%d-%H%M")-${VERSION}"
+        echo "::set-output name=base_version::${REPO_OWN}/${REPO_NAME}@${COMMIT}"
+
+    - name: Build
+      env:
+        ARTIFACTS_DIR_ABS: ${{ steps.info.outputs.artifacts_dir_abs }}
+      run: |
+        cd $GITHUB_WORKSPACE/${REPO_NAME}
+        make
+        mkdir -p ${ARTIFACTS_DIR_ABS}
+        cat dist/images | xargs -r docker save | gzip -9 > ${ARTIFACTS_DIR_ABS}/rancher-images.tar.gz
+
+    - name: Generate release info
+      env:
+        BASE_VERSION: ${{ steps.info.outputs.base_version }}
+        GDRIVE_DOWNLOAD_URL: ${{ steps.gdrive.outputs.downloadURL }}
+      run: |
+        echo "🍻 Base on ${BASE_VERSION}" > release.txt
+
+    - name: Create release
+      uses: softprops/action-gh-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        body_path: release.txt
+        tag_name: ${{ steps.info.outputs.tag_name }}
+        files: ${{ steps.info.outputs.artifacts_dir_abs }}/*
+
+    - name: Delete workflow runs
+      uses: GitRML/delete-workflow-runs@main
+      with:
+        retain_days: 1
+        keep_minimum_runs: 3
+
+    - name: Remove old releases
+      uses: dev-drprasad/delete-older-releases@v0.1.0
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        keep_latest: 1
+        delete_tags: true
+

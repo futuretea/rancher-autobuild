@@ -1,0 +1,48 @@
+name: Update Checker
+
+env:
+  REPO_OWN: futuretea
+  REPO_NAME: rancher
+  REPO_BRANCH: futuretea
+
+on:
+  workflow_dispatch:
+  schedule:
+  - cron: '0 0 * * *'
+
+jobs:
+  check:
+    runs-on: ubuntu-18.04
+
+    steps:
+
+    - name: Get Commit Hash
+      id: getHash
+      run: |
+        git clone --depth 1 https://github.com/${REPO_OWN}/${REPO_NAME} -b $REPO_BRANCH .
+        echo "::set-output name=commitHash::$(git rev-parse HEAD)"
+
+    - name: Compare Commit Hash
+      id: cacheHash
+      uses: actions/cache@v2
+      with:
+        path: .commitHash
+        key: HEAD-${{ steps.getHash.outputs.commitHash }}
+
+    - name: Save New Commit Hash
+      if: steps.cacheHash.outputs.cache-hit != 'true'
+      run: |
+        echo ${{ steps.getHash.outputs.commitHash }} | tee .commitHash
+
+    - name: Trigger build
+      if: steps.cacheHash.outputs.cache-hit != 'true'
+      uses: peter-evans/repository-dispatch@v1
+      with:
+        token: ${{ secrets.ACTIONS_TRIGGER_PAT }}
+        event-type: Source Code Update
+
+    - name: Delete workflow runs
+      uses: GitRML/delete-workflow-runs@main
+      with:
+        retain_days: 1
+        keep_minimum_runs: 1
